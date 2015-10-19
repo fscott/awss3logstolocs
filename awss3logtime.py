@@ -53,8 +53,12 @@ def get_ip_from_s3_log(line):
 def get_ips_from_logs(path_to_logs, your_ips):    
     for filename in os.listdir(path_to_logs):
         with open(path_to_logs + filename) as f:
-            t = f.readlines()
-            your_ips.append(get_ip_from_s3_log(t[0]))  
+            if 'DS_Store' not in filename:
+                t = f.readlines()
+                try:
+                    your_ips.append(get_ip_from_s3_log(t[0]))
+                except AttributeError:
+                    print filename + ' is an invalid file.'
     return your_ips
 
 def open_csv_files():
