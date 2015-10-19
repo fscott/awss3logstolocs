@@ -2,6 +2,11 @@
 #
 # Copyright (c) 2015 Franklin Scott
 # http://www.franklinscott.com/
+#
+# This work is licensed under the Creative Commons Attribution-ShareAlike 3.0 International License. 
+# To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/ 
+# or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
+# This script uses the GeoLite2 data created by MaxMind, available from http://www.maxmind.com.
 
 import csv
 import sys
@@ -10,7 +15,7 @@ import re
 import subprocess
 import argparse
 
-usage = "usage: /.%(prog)s [options] Given a file with a list of ip addresses or a folder with aws s3 logs, print locations from the free Maxmind geoip databases."
+usage = "usage: /.%(prog)s [options] Given a file with a list of ip addresses or a folder with aws s3 logs, print locations from the free Maxmind GeoLite2 databases."
 parser = argparse.ArgumentParser(usage=usage)
 
 parser.add_argument("-i", action="store", default='GeoLite2-City-Blocks-IPv4.csv', help="name of ip addresses csv file (default: %(default)s)")
@@ -25,6 +30,7 @@ options = parser.parse_args()
 s3bucket = options.s3
 
 def map_your_ips(your_ips):
+    ips_to_locs, locs_to_places = open_csv_files()
     output = []
     all = len(your_ips)
     curr = 0
@@ -44,7 +50,7 @@ def get_ip_from_s3_log(line):
     p = re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line)
     return p.group()
 
-def get_ips_from_logs(path_to_logs):    
+def get_ips_from_logs(path_to_logs, your_ips):    
     for filename in os.listdir(path_to_logs):
         with open(path_to_logs + filename) as f:
             t = f.readlines()
@@ -94,9 +100,7 @@ def write_results(output):
         for x in output:
             print x
 
-def main():
-    ips_to_locs, locs_to_places = open_csv_files()
-    
+def main():    
     your_ips = []
     # We're trying to get the IPs.
     
@@ -117,8 +121,8 @@ def main():
         if x == 0:
             s3success = True #for test
     
-    if s3success or skips3:
-        your_ips = get_ips_from_logs(options.logpath)
+    if s3success or options.skips3:
+        your_ips = get_ips_from_logs(options.logpath, your_ips)
                  
     output = map_your_ips(your_ips)
     write_results(output)
