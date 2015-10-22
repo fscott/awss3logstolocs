@@ -12,6 +12,8 @@ import csv
 import sys
 import os
 import re
+import time
+import datetime
 import subprocess
 import argparse
 
@@ -24,10 +26,27 @@ parser.add_argument("-f", action="store", default='', help="name of file contain
 parser.add_argument("-o", action="store", default='', help="name of output file")
 parser.add_argument("-s3", action="store", default='', help="name of s3 bucket with logging enabled")
 parser.add_argument("-logpath", action="store", default='./root/', help="name the local path to logs (default: %(default)s)")
-parser.add_argument("--skips3", dest="skips3", action="store_true")
+parser.add_argument("-skips3", dest="skips3", action="store_true")
+parser.add_argument("-s", action="store", default='1900-01-01', help="start date of logs(YYYY-MM-DD)") # Need to validate these
+parser.add_argument("-e", action="store", default=time.strftime('%Y-%m-%d'), help="end date of logs (YYYY-MM-DD) (default: %(default)s)")
+parser.add_argument("-today", action="store_true", help="look at today's logs")
+
 
 options = parser.parse_args()
 s3bucket = options.s3
+today = time.strftime('%Y-%m-%d')
+only_today = options.today
+s = options.s
+e = options.e
+try:
+    start = datetime.datetime.strptime(s, "%Y-%m-%d")
+    if e != today:
+        end = datetime.datetime.strptime(e, "%Y-%m-%d")
+    else:
+        end = datetime.datetime.strptime(today, "%Y-%m-%d")
+except ValueError:
+    print "Dates are not in correct format. Exiting..."
+    sys.exit(1)
 
 def map_your_ips(your_ips):
     ips_to_locs, locs_to_places = open_csv_files()
@@ -50,10 +69,22 @@ def get_ip_from_s3_log(line):
     p = re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line)
     return p.group()
 
+def log_in_range(filename):
+    if only_today and today in filename:
+        return True
+    try:
+        logdate = filename[0:10]
+        logdate = datetime.datetime.strptime(logdate, "%Y-%m-%d")
+        if start <= logdate <= end:
+            return True    
+    except ValueError:
+        return False
+    return False
+
 def get_ips_from_logs(path_to_logs, your_ips):    
     for filename in os.listdir(path_to_logs):
-        with open(path_to_logs + filename) as f:
-            if 'DS_Store' not in filename:
+        if 'DS_Store' not in filename and log_in_range(filename):
+            with open(path_to_logs + filename) as f:
                 t = f.readlines()
                 try:
                     your_ips.append(get_ip_from_s3_log(t[0]))
@@ -121,7 +152,11 @@ def main():
     # If we're using s3, download the logs and parse them. Or just skip s3 and parse ones we already have.
     s3success = False
     if len(s3bucket) > 0 and options.skips3 == False:
-        x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
+        if len(start) > 0 or len(end) > 0:  
+            # Need to finish this
+            x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
+        else:
+            x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
         if x == 0:
             s3success = True #for test
     
