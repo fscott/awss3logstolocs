@@ -7,6 +7,9 @@
 # To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/ 
 # or send a letter to Creative Commons, PO Box 1866, Mountain View, CA 94042, USA.
 # This script uses the GeoLite2 data created by MaxMind, available from http://www.maxmind.com.
+#
+# The AWS server access log format is available here:
+# http://docs.aws.amazon.com/AmazonS3/latest/dev/LogFormat.html
 
 import csv
 import sys
@@ -16,6 +19,16 @@ import time
 import datetime
 import subprocess
 import argparse
+
+class AWSLog:
+    # More to add in the future depending on what parsers seem useful
+    def __init__(self):
+        self.date_time = ''
+        self.ip = ''
+        self.user_agent = ''
+        self.log_filename = ''
+        self.location_map = ''
+        self.matched_ip = ''
 
 usage = "usage: /.%(prog)s [options] Given a file with a list of ip addresses or a folder with aws s3 logs, print locations from the free Maxmind GeoLite2 databases."
 parser = argparse.ArgumentParser(usage=usage)
@@ -30,7 +43,7 @@ parser.add_argument("-skips3", dest="skips3", action="store_true")
 parser.add_argument("-s", action="store", default='1900-01-01', help="start date of logs(YYYY-MM-DD)") # Need to validate these
 parser.add_argument("-e", action="store", default=time.strftime('%Y-%m-%d'), help="end date of logs (YYYY-MM-DD) (default: %(default)s)")
 parser.add_argument("-today", action="store_true", help="look at today's logs")
-
+parser.add_argument("-nobots", action="store_true", help="ignore apparent bots")
 
 options = parser.parse_args()
 s3bucket = options.s3
@@ -48,26 +61,70 @@ except ValueError:
     print "Dates are not in correct format. Exiting..."
     sys.exit(1)
 
-def map_your_ips(your_ips):
+def get_candidates(ip, ips_to_locs):
+    short_ip = ip[:ip.rfind('.')]
+    candidates = {}
+    for x in ips_to_locs:
+        lastp = x.rfind('.')
+        shortx = x[:lastp]
+        templ = []
+        if short_ip == shortx:
+            if shortx in candidates:
+                templ = candidates[shortx]
+            templ.append(x[lastp+1:])
+            candidates[shortx] = templ
+    return candidates
+
+def map_your_ips(your_logs):
     ips_to_locs, locs_to_places = open_csv_files()
     output = []
-    all = len(your_ips)
+    all = len(your_logs)
     curr = 0
-    for line in your_ips:
+    for log in your_logs:
         print 'Processing %s out of %s' % (curr,all)
         curr += 1
-        for x in ips_to_locs: 
-            if x in line:
-                val = ips_to_locs[x]
-                try:
-                    output.append(line.strip() + ' ' + locs_to_places[val])
-                except KeyError:
-                    output.append("No key for " + x)
-    return output
+        candidates = get_candidates(log.ip, ips_to_locs)
+        ip_end = log.ip[log.ip.rfind('.')+1:]
+        other_ends = []
+
+        if len(candidates) > 0:
+            only = ''
+            for key in candidates:       
+                only = key
+                if ip_end in candidates[key]:
+                    full = '%s.%s' % (key, ip_end)
+                    log.matched_ip = full
+                    log.location_map = '%s: %s %s %s (%s)' % (log.filename, log.ip.strip(), log.matched_ip, locs_to_places[ips_to_locs[full]], log.user_agent)
+                    log.location_map.strip()                
+                else:
+                    if len(candidates) == 1:
+                        for x in candidates[key]:
+                            other_ends.append(x)
+                    else:
+                        print 'TROUBLE'
+            
+            if log.location_map == '':
+                best_end = min(other_ends, key=lambda x:abs(int(x)-int(ip_end)))
+                full = '%s.%s' % (only, best_end)
+                log.matched_ip = full
+                log.location_map = '%s: %s %s %s (%s)' % (log.filename, log.ip.strip(), log.matched_ip, locs_to_places[ips_to_locs[full]], log.user_agent)
+                log.location_map.strip() 
+
+        if log.location_map == '':
+            log.location_map = '%s: No location match for %s (%s)' % (log.filename, log.ip.strip(), log.user_agent)
+            print log.filename + " " + log.ip
+    return your_logs
 
 def get_ip_from_s3_log(line):
     p = re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line)
     return p.group()
+
+def get_User_Agent_from_s3_log(line):
+    # This seems to work, although I can't guarantee it.
+    end = line.rfind(')')
+    begin = line.rfind(' \"',0, end) 
+    return line[begin+1:end]
+        
 
 def log_in_range(filename):
     if only_today and today in filename:
@@ -81,16 +138,23 @@ def log_in_range(filename):
         return False
     return False
 
-def get_ips_from_logs(path_to_logs, your_ips):    
+def get_ips_from_logs(path_to_logs, your_logs):    
     for filename in os.listdir(path_to_logs):
         if 'DS_Store' not in filename and log_in_range(filename):
             with open(path_to_logs + filename) as f:
+                log = AWSLog()
+                log.filename = filename
                 t = f.readlines()
                 try:
-                    your_ips.append(get_ip_from_s3_log(t[0]))
+                    log.ip = get_ip_from_s3_log(t[0])
+                    log.user_agent = get_User_Agent_from_s3_log(t[0])
+                    if 'bot' in log.user_agent and options.nobots:
+                        print 'Skipping %s because it looks like a bot.' % (log.filename)
+                    else:
+                        your_logs.append(log)  
                 except AttributeError:
                     print filename + ' is an invalid file.'
-    return your_ips
+    return your_logs
 
 def open_csv_files():
     ips = []
@@ -111,32 +175,32 @@ def open_csv_files():
     
     ips_to_locs = {}
     for x in ips:
-        trim = x[0].rfind('.')
+        trim = x[0].rfind('/')
         ip = x[0][:trim]
         ips_to_locs[ip]=x[1]
     
     locs_to_places = {}
     for y in locs:
-        l = [y[5],y[7],y[8],y[9],y[10],y[11],y[12]]
-        for thing in l:
-            if len(thing) < 1:
-                l.remove(thing)
-        place = ' '.join(l)
+        loc_data = [y[5],y[7],y[8],y[9],y[10],y[11],y[12]]
+        for datum in loc_data:
+            if len(datum) < 1:
+                loc_data.remove(datum)
+        place = ' '.join(loc_data)
         locs_to_places[y[0]] = place  
     return ips_to_locs, locs_to_places
 
-def write_results(output):
+def write_results(your_logs):
     if len(options.o) > 1:
         with open(options.o, 'w') as outfile:
-            for x in output:
-                outfile.write(x)
+            for log in your_logs:
+                outfile.write(log.location_map+'\n')
         print 'See file %s for output.' % (options.o)
     else:
-        for x in output:
-            print x
+        for log in your_logs:
+            print log.location_map
 
 def main():    
-    your_ips = []
+    your_logs = []
     # We're trying to get the IPs.
     
     # If there's an input file with IPs, then check to see whether we have locations for any of them.
@@ -144,7 +208,10 @@ def main():
         lines = []
         try:
             with open(options.f) as f3:
-                your_ips = f3.readlines()
+                for x in f3:
+                    log = AWSLog()
+                    log.ip = x
+                    your_logs.append(log)
         except IOError:
             print 'No file by that name. Exiting'
             sys.exit(1)
@@ -152,8 +219,8 @@ def main():
     # If we're using s3, download the logs and parse them. Or just skip s3 and parse ones we already have.
     s3success = False
     if len(s3bucket) > 0 and options.skips3 == False:
-        if len(start) > 0 or len(end) > 0:  
-            # Need to finish this
+        if True == True:  
+            # Need to finish this, right now it gets all logs every time, rather than just the necessary logs.
             x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
         else:
             x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
@@ -161,10 +228,10 @@ def main():
             s3success = True #for test
     
     if s3success or options.skips3:
-        your_ips = get_ips_from_logs(options.logpath, your_ips)
+        your_logs = get_ips_from_logs(options.logpath, your_logs)
                  
-    output = map_your_ips(your_ips)
-    write_results(output)
+    your_logs = map_your_ips(your_logs)
+    write_results(your_logs)
 
 if __name__ == "__main__":
     main()
