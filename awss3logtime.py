@@ -108,7 +108,7 @@ def map_your_ips(your_logs):
             
             if log.location_map == '':
                 best_end = min(other_ends, key=lambda x:abs(int(x)-int(ip_end)))
-                full = '%s.%s' % (only, best_end)
+                full = '%s.%s' % (only_candidate, best_end)
                 log.matched_ip = full
                 log.location_map = '%s: %s %s %s (%s)' % (log.filename, log.ip.strip(), log.matched_ip, locs_to_places[ips_to_locs[full]], log.user_agent)
                 log.location_map.strip() 
@@ -146,7 +146,6 @@ def log_in_range(filename):
 
 def get_ips_from_logs(path_to_logs, your_logs):    
     for filename in os.listdir(path_to_logs):
-        print filename
         if 'DS_Store' not in filename and log_in_range(filename):
             with open(path_to_logs + filename) as f:
                 log = AWSLog()
@@ -239,6 +238,16 @@ def main():
     if len(s3bucket) > 0 and options.skips3 == False:
         if options.all:  
             x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, options.logpath, "--recursive"],stderr=subprocess.STDOUT)
+        elif only_today:
+            ob = ("aws","s3","cp","s3://logs.%s/%s" % (s3bucket,options.logpath), path, "--recursive", "--exclude", '"*"', "--include", '"*%s*"' % today)
+            comm = ' '.join(ob)
+            x = subprocess.Popen(comm, shell=True,stderr=subprocess.STDOUT)            
+            x.wait()
+            if x.returncode ==0:
+                s3success = True
+            else:
+                s3success = False
+                print "There was some problem downloading the logs. Returncode %s" % (x.returncode)    
         else:
             dates = get_dates()
             for y in dates:
