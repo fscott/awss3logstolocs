@@ -38,14 +38,13 @@ parser.add_argument("-l", action="store", default='GeoLite2-City-Locations-en.cs
 parser.add_argument("-f", action="store", default='', help="name of file containing ip addresses")
 parser.add_argument("-o", action="store", default='', help="name of output file")
 parser.add_argument("-s3", action="store", default='', help="name of s3 bucket with logging enabled")
-parser.add_argument("-logpath", action="store", default='root', help="name the local path to logs (default: %(default)s)")
+parser.add_argument("-logpath", action="store", default='root', help="name of the local and aws directory with logs (default: %(default)s). Both must already exist.")
 parser.add_argument("-skips3", dest="skips3", action="store_true")
 parser.add_argument("-s", action="store", default='1900-01-01', help="start date of logs(YYYY-MM-DD)") # Need to validate these
 parser.add_argument("-e", action="store", default=time.strftime('%Y-%m-%d'), help="end date of logs (YYYY-MM-DD) (default: %(default)s)")
 parser.add_argument("-today", action="store_true", help="just look at today's logs")
 parser.add_argument("-all", action="store_true", help="download all the available logs and process")
 parser.add_argument("-nobots", action="store_true", help="ignore apparent bots")
-
 
 options = parser.parse_args()
 s3bucket = options.s3
@@ -115,7 +114,7 @@ def map_your_ips(your_logs):
 
         if log.location_map == '':
             log.location_map = '%s: No location match for %s (%s)' % (log.filename, log.ip.strip(), log.user_agent)
-            print log.filename + " " + log.ip
+            print log.filename + ": No location match for " + log.ip
     return your_logs
 
 def get_ip_from_s3_log(line):
@@ -128,7 +127,6 @@ def get_User_Agent_from_s3_log(line):
     begin = line.rfind(' \"',0, end) 
     return line[begin+1:end]
         
-
 def log_in_range(filename):
     if only_today and today in filename:
         return True
@@ -233,7 +231,7 @@ def main():
             print 'No file by that name. Exiting'
             sys.exit(1)
     
-    # If we're using s3, download the logs and parse them. Or just skip s3 and parse ones we already have.
+    # If we're using s3, download the logs (either all or within a date range) and parse them. Or just skip s3 and parse ones we already have.
     s3success = False
     if len(s3bucket) > 0 and options.skips3 == False:
         if options.all:  
@@ -253,6 +251,7 @@ def main():
             for y in dates:
                 ob = ("aws","s3","cp","s3://logs.%s/%s" % (s3bucket,options.logpath), path, "--recursive", "--exclude", '"*"', "--include", '"*%s*"' % y.strftime("%Y-%m-%d"))
                 comm = ' '.join(ob)
+                # Seems we have to use Popen because of the asterisk in the aws s3 call, even though no expansion happens locally, I would think.
                 x = subprocess.Popen(comm, shell=True,stderr=subprocess.STDOUT)            
                 x.wait()
                 if x.returncode ==0:
