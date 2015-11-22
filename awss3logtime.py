@@ -38,12 +38,14 @@ parser.add_argument("-l", action="store", default='GeoLite2-City-Locations-en.cs
 parser.add_argument("-f", action="store", default='', help="name of file containing ip addresses")
 parser.add_argument("-o", action="store", default='', help="name of output file")
 parser.add_argument("-s3", action="store", default='', help="name of s3 bucket with logging enabled")
-parser.add_argument("-logpath", action="store", default='./root/', help="name the local path to logs (default: %(default)s)")
+parser.add_argument("-logpath", action="store", default='root', help="name the local path to logs (default: %(default)s)")
 parser.add_argument("-skips3", dest="skips3", action="store_true")
 parser.add_argument("-s", action="store", default='1900-01-01', help="start date of logs(YYYY-MM-DD)") # Need to validate these
 parser.add_argument("-e", action="store", default=time.strftime('%Y-%m-%d'), help="end date of logs (YYYY-MM-DD) (default: %(default)s)")
-parser.add_argument("-today", action="store_true", help="look at today's logs")
+parser.add_argument("-today", action="store_true", help="just look at today's logs")
+parser.add_argument("-all", action="store_true", help="download all the available logs and process")
 parser.add_argument("-nobots", action="store_true", help="ignore apparent bots")
+
 
 options = parser.parse_args()
 s3bucket = options.s3
@@ -60,6 +62,7 @@ try:
 except ValueError:
     print "Dates are not in correct format. Exiting..."
     sys.exit(1)
+path = './%s/' % options.logpath #For logpath to be some current directory
 
 def get_candidates(ip, ips_to_locs):
     short_ip = ip[:ip.rfind('.')]
@@ -88,9 +91,9 @@ def map_your_ips(your_logs):
         other_ends = []
 
         if len(candidates) > 0:
-            only = ''
+            only_candidate = ''
             for key in candidates:       
-                only = key
+                only_candidate = key
                 if ip_end in candidates[key]:
                     full = '%s.%s' % (key, ip_end)
                     log.matched_ip = full
@@ -101,7 +104,7 @@ def map_your_ips(your_logs):
                         for x in candidates[key]:
                             other_ends.append(x)
                     else:
-                        print 'TROUBLE'
+                        print 'More than one candidate. Could be bad cvs data.'
             
             if log.location_map == '':
                 best_end = min(other_ends, key=lambda x:abs(int(x)-int(ip_end)))
@@ -129,17 +132,21 @@ def get_User_Agent_from_s3_log(line):
 def log_in_range(filename):
     if only_today and today in filename:
         return True
-    try:
-        logdate = filename[0:10]
-        logdate = datetime.datetime.strptime(logdate, "%Y-%m-%d")
-        if start <= logdate <= end:
-            return True    
-    except ValueError:
+    elif not only_today:
+        try:
+            logdate = filename[0:10]
+            logdate = datetime.datetime.strptime(logdate, "%Y-%m-%d")
+            if start <= logdate <= end:
+                return True    
+        except ValueError:
+            return False
         return False
-    return False
+    else:
+        return False
 
 def get_ips_from_logs(path_to_logs, your_logs):    
     for filename in os.listdir(path_to_logs):
+        print filename
         if 'DS_Store' not in filename and log_in_range(filename):
             with open(path_to_logs + filename) as f:
                 log = AWSLog()
@@ -199,6 +206,17 @@ def write_results(your_logs):
         for log in your_logs:
             print log.location_map
 
+def get_dates():
+    dates = []
+    if only_today:
+        return today
+    d = start
+    delta = datetime.timedelta(days=1)
+    while d<= end:
+        dates.append(d)
+        d += delta
+    return dates
+
 def main():    
     your_logs = []
     # We're trying to get the IPs.
@@ -219,16 +237,25 @@ def main():
     # If we're using s3, download the logs and parse them. Or just skip s3 and parse ones we already have.
     s3success = False
     if len(s3bucket) > 0 and options.skips3 == False:
-        if True == True:  
-            # Need to finish this, right now it gets all logs every time, rather than just the necessary logs.
-            x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
+        if options.all:  
+            x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, options.logpath, "--recursive"],stderr=subprocess.STDOUT)
         else:
-            x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, ".", "--recursive"],stderr=subprocess.STDOUT)
+            dates = get_dates()
+            for y in dates:
+                ob = ("aws","s3","cp","s3://logs.%s/%s" % (s3bucket,options.logpath), path, "--recursive", "--exclude", '"*"', "--include", '"*%s*"' % y.strftime("%Y-%m-%d"))
+                comm = ' '.join(ob)
+                x = subprocess.Popen(comm, shell=True,stderr=subprocess.STDOUT)            
+                x.wait()
+                if x.returncode ==0:
+                    s3success = True
+                else:
+                    s3success = False
+                    print "There was some problem downloading the logs. Returncode %s" % (x.returncode)
         if x == 0:
             s3success = True #for test
     
     if s3success or options.skips3:
-        your_logs = get_ips_from_logs(options.logpath, your_logs)
+        your_logs = get_ips_from_logs(path, your_logs)
                  
     your_logs = map_your_ips(your_logs)
     write_results(your_logs)
