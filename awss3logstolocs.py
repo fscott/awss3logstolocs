@@ -40,7 +40,7 @@ parser.add_argument("-o", action="store", default='', help="name of output file"
 parser.add_argument("-s3", action="store", default='', help="name of s3 bucket with logging enabled")
 parser.add_argument("-logpath", action="store", default='root', help="name of the local and aws directory with logs (default: %(default)s). Both must already exist.")
 parser.add_argument("-skips3", dest="skips3", action="store_true")
-parser.add_argument("-s", action="store", default='1900-01-01', help="start date of logs(YYYY-MM-DD)") # Need to validate these
+parser.add_argument("-s", action="store", default='2006-03-14', help="start date of logs(YYYY-MM-DD) (default: %(default)s)") # Default is date s3 launched
 parser.add_argument("-e", action="store", default=time.strftime('%Y-%m-%d'), help="end date of logs (YYYY-MM-DD) (default: %(default)s)")
 parser.add_argument("-today", action="store_true", help="just look at today's logs")
 parser.add_argument("-all", action="store_true", help="download all the available logs and process")
@@ -235,10 +235,12 @@ def main():
     s3success = False
     if len(s3bucket) > 0 and options.skips3 == False:
         if options.all:  
+            print "Fetching all the logs."
             x = subprocess.call(["aws","s3","cp","s3://logs.%s" % s3bucket, options.logpath, "--recursive"],stderr=subprocess.STDOUT)
         elif only_today:
             ob = ("aws","s3","cp","s3://logs.%s/%s" % (s3bucket,options.logpath), path, "--recursive", "--exclude", '"*"', "--include", '"*%s*"' % today)
             comm = ' '.join(ob)
+            print "Fetching today's logs."
             x = subprocess.Popen(comm, shell=True,stderr=subprocess.STDOUT)            
             x.wait()
             if x.returncode ==0:
@@ -253,6 +255,7 @@ def main():
                 comm = ' '.join(ob)
                 # Seems we have to use Popen because of the asterisk in the aws s3 call, even though no expansion happens locally, I would think.
                 x = subprocess.Popen(comm, shell=True,stderr=subprocess.STDOUT)            
+                print "Fetching logs for %s" % y.strftime("%Y-%m-%d")
                 x.wait()
                 if x.returncode ==0:
                     s3success = True
